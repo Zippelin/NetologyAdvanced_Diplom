@@ -22,7 +22,7 @@ class VKinder:
 
     def __init__(self):
         self.__token_group = VK_COMMUNITY_TOKEN_FULL
-        self.__application_id = 7822131
+        self.__application_id = None # Важно - нужн указать ID приложения
         self.__auth_url = f'https://oauth.vk.com/authorize?client_id={self.__application_id}&display=page&scope=stats,offline,friends,groups,photos&response_type=token&v=5.126'
         self.__user_token = None
 
