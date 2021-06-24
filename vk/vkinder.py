@@ -36,7 +36,6 @@ class VKinder:
             'find_pairs': (self.CMD_GET_PEOPLE, self.__get_pairs),
             'like': (self.CMD_LIKEPHOTO, self.__like_photo),
         }
-
         self.__db_worker = DBWorker()
 
     def __set_user_token(self, **kwargs) -> list:
@@ -44,33 +43,26 @@ class VKinder:
         self.vk_requester = vk_api.VkApi(token=self.__user_token).get_api()
         return [{'msg': 'Token установлен'}]
 
-    def __get_pairs(self, **kwargs) -> list:
-        search_age_offset = 10
-        result_count = 3
-        search_count = 10
-
-        subject_user_id = kwargs['user_id']
+    def __check_subject_user_is_unique(self, **kwargs):
         if kwargs['params'] and not kwargs['params'][0].isdigit():
             subject_user_id = self.__search_user({'q': kwargs['params'][0]}, strict_mode=True)['id']
             if not subject_user_id:
-                return ['Найдено несколько пользователей, уточните запрос']
+                return False, []
         elif kwargs['params']:
-            subject_user_id = kwargs['params'][0]
-        subject_user = self.__get_user(subject_user_id)[0]
+            return True, kwargs['params'][0]
+        return True, kwargs['user_id']
 
-        subject_user_bdate = datetime.strptime(subject_user['bdate'], '%d.%m.%Y')
-        subject_user_age = datetime.now().year - subject_user_bdate.year
-
+    def __deduplicate_results(self, user, user_id, age, count, age_offeser, search_count):
         dedublicated_result = []
 
-        while len(dedublicated_result) < result_count:
+        while len(dedublicated_result) < count:
             pairs = self.__search_user({
-                'city': subject_user['city']['id'],
-                'sex': (lambda x: 1 if x == 2 else 2)(subject_user['sex']),
-                'country': subject_user['country']['id'],
+                'city': user['city']['id'],
+                'sex': (lambda x: 1 if x == 2 else 2)(user['sex']),
+                'country': user['country']['id'],
                 'relation': 1,
-                'age_from': subject_user_age - search_age_offset,
-                'age_to': subject_user_age,
+                'age_from': age - age_offeser,
+                'age_to': age,
                 'count': search_count,
                 'fields': ('sex',),
                 'has_photo': 1,
@@ -82,10 +74,39 @@ class VKinder:
                 if person['can_access_closed'] == 1
             ]
 
-            dedublicated_result += self.__db_worker.dedublicate_search(vk_id=subject_user_id,
-                                                                       data=no_closed_result,
-                                                                       count=result_count - len(dedublicated_result))
-            search_count += result_count
+            if self.__db_worker.status:
+
+                dedublicated_result += self.__db_worker.dedublicate_search(vk_id=user_id,
+                                                                           data=no_closed_result,
+                                                                           count=count - len(
+                                                                               dedublicated_result))
+            else:
+                dedublicated_result = no_closed_result
+
+            search_count += count
+        return dedublicated_result
+
+    def __get_pairs(self, **kwargs) -> list:
+        search_age_offset = 10
+        result_count = 3
+        search_count = 10
+
+        check_status, subject_user_id = self.__check_subject_user_is_unique(**kwargs)
+
+        if not check_status:
+            return ['Найдено несколько пользователей, уточните запрос']
+
+        subject_user = self.__get_user(subject_user_id)[0]
+
+        subject_user_bdate = datetime.strptime(subject_user['bdate'], '%d.%m.%Y')
+        subject_user_age = datetime.now().year - subject_user_bdate.year
+        dedublicated_result = self.__deduplicate_results(user=subject_user,
+                                                         user_id=subject_user_id,
+                                                         age=subject_user_age,
+                                                         count=result_count,
+                                                         age_offeser=search_age_offset,
+                                                         search_count=search_count)
+
 
         for p in dedublicated_result:
             p['preview_photo'] = self.__get_most_popular_photos(p['id'])
@@ -167,10 +188,10 @@ class VKinder:
                     if self.__commands[command][0] == self.CMD_GET_PEOPLE:
                         self.__vk_bot.method(self.__EP_SEND_MESSAGE,
                                              {
-                                               'message': '<br>Начало поиска... это может занять некотрое время...<br><br>',
-                                               'user_id': event.user_id,
-                                               'random_id': randrange(10 ** 7)
-                                           })
+                                                 'message': '<br>Начало поиска... это может занять некотрое время...<br><br>',
+                                                 'user_id': event.user_id,
+                                                 'random_id': randrange(10 ** 7)
+                                             })
                     command_response_list = self.__route(command=command,
                                                          params=params,
                                                          user_id=event.user_id,
@@ -179,7 +200,7 @@ class VKinder:
                 for line in command_response_list:
                     self.__vk_bot.method(self.__EP_SEND_MESSAGE,
                                          {'message': line['msg'], 'user_id': event.user_id,
-                                        'random_id': randrange(10 ** 7), })
+                                          'random_id': randrange(10 ** 7), })
                     if command in self.__commands.keys() and self.__commands[command][0] == self.CMD_GET_PEOPLE:
                         carousel = {
                             "type": "carousel",
@@ -205,8 +226,8 @@ class VKinder:
 
                             self.__vk_bot.method(self.__EP_SEND_MESSAGE,
                                                  {'user_id': event.user_id,
-                                                'random_id': randrange(10 ** 7),
-                                                'attachment': f'photo{photo["attachment_id"]}'})
+                                                  'random_id': randrange(10 ** 7),
+                                                  'attachment': f'photo{photo["attachment_id"]}'})
                             keyboard = json.dumps(dict(inline=True, buttons=[
                                 [
                                     {
@@ -221,14 +242,14 @@ class VKinder:
                             ]))
                             self.__vk_bot.method(self.__EP_SEND_MESSAGE,
                                                  {'user_id': event.user_id,
-                                                'message': '-',
-                                                'random_id': randrange(10 ** 7),
-                                                'keyboard': keyboard
-                                                })
+                                                  'message': '-',
+                                                  'random_id': randrange(10 ** 7),
+                                                  'keyboard': keyboard
+                                                  })
 
                     self.__vk_bot.method(self.__EP_SEND_MESSAGE,
                                          {'message': f'<br>', 'user_id': event.user_id,
-                                        'random_id': randrange(10 ** 7)})
+                                          'random_id': randrange(10 ** 7)})
 
     def __read_command(self, text_line):
         params = None
